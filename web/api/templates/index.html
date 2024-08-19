@@ -54,12 +54,18 @@
                 },
                 body: JSON.stringify(data),
             })
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) {
+                    return response.json().then(err => { throw err; });
+                }
+                return response.json();
+            })
             .then(result => {
                 document.getElementById('result').textContent = JSON.stringify(result, null, 2);
             })
             .catch(error => {
-                document.getElementById('result').textContent = '错误: ' + error;
+                console.error('Error:', error);
+                document.getElementById('result').textContent = '错误: ' + (error.error || '未知错误');
             });
         });
     </script>
