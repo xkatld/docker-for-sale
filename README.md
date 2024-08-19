@@ -27,3 +27,9 @@ docker build --target arch -t ssh-arch .
 docker build --target alpine -t ssh-alpine .
 ```
 默认端口密码都是22/password
+
+# 启动web-api
+```
+pip3 install flask docker
+python3 app.py
+```
