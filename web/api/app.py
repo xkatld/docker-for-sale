@@ -1,8 +1,13 @@
 from flask import Flask, request, jsonify, render_template
+from flask_sqlalchemy import SQLAlchemy
 import docker
 import random
+import os
 
 app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///containers.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = SQLAlchemy(app)
 
 client = docker.from_env()
 
@@ -15,23 +20,18 @@ SUPPORTED_IMAGES = {
     'ssh-alpine': 'ssh-alpine'
 }
 
-def find_available_ports(ssh_range=(10000, 19999), nat_range=(20000, 65535), nat_count=500):
-    used_ports = set()
-    for container in client.containers.list():
-        for port_config in container.ports.values():
-            if port_config:
-                used_ports.add(int(port_config[0]['HostPort']))
-    
-    available_ssh_ports = list(set(range(ssh_range[0], ssh_range[1] + 1)) - used_ports)
-    available_nat_ports = list(set(range(nat_range[0], nat_range[1] + 1)) - used_ports)
-    
-    if not available_ssh_ports or len(available_nat_ports) < nat_count:
-        raise Exception("没有足够的可用端口")
-    
-    ssh_port = random.choice(available_ssh_ports)
-    nat_ports = sorted(random.sample(available_nat_ports, nat_count))
-    
-    return ssh_port, nat_ports[0], nat_ports[-1]
+class Container(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(80), unique=True, nullable=False)
+    image = db.Column(db.String(80), nullable=False)
+    ssh_port = db.Column(db.Integer, unique=True, nullable=False)
+    nat_start_port = db.Column(db.Integer, unique=True, nullable=False)
+    nat_end_port = db.Column(db.Integer, unique=True, nullable=False)
+
+def find_available_port(start, end):
+    used_ports = set(Container.query.with_entities(Container.ssh_port).all())
+    available_ports = set(range(start, end + 1)) - used_ports
+    return random.choice(list(available_ports)) if available_ports else None
 
 def create_container(image_key, name, cpu, memory):
     if image_key not in SUPPORTED_IMAGES:
@@ -39,10 +39,13 @@ def create_container(image_key, name, cpu, memory):
 
     image = SUPPORTED_IMAGES[image_key]
 
-    # 生成端口
-    ssh_port, nat_start_port, nat_end_port = find_available_ports()
+    ssh_port = find_available_port(10000, 10999)
+    nat_start_port = find_available_port(20000, 60000)
+    nat_end_port = nat_start_port + 99  # 分配100个NAT端口
 
-    # 创建容器
+    if not all([ssh_port, nat_start_port]):
+        raise Exception("没有足够的可用端口")
+
     container = client.containers.run(
         image,
         name=name,
@@ -54,12 +57,15 @@ def create_container(image_key, name, cpu, memory):
         ports={'22/tcp': ssh_port}
     )
 
-    container_ip = container.attrs['NetworkSettings']['IPAddress']
+    new_container = Container(name=name, image=image, ssh_port=ssh_port,
+                              nat_start_port=nat_start_port, nat_end_port=nat_end_port)
+    db.session.add(new_container)
+    db.session.commit()
 
     return {
         "name": name,
         "image": image,
-        "ip": container_ip,
+        "ip": container.attrs['NetworkSettings']['IPAddress'],
         "ssh_port": ssh_port,
         "nat_start_port": nat_start_port,
         "nat_end_port": nat_end_port
@@ -67,7 +73,8 @@ def create_container(image_key, name, cpu, memory):
 
 @app.route('/')
 def index():
-    return render_template('index.html', images=SUPPORTED_IMAGES.keys())
+    containers = Container.query.all()
+    return render_template('index.html', images=SUPPORTED_IMAGES.keys(), containers=containers)
 
 @app.route('/api/create_container', methods=['POST'])
 def api_create_container():
@@ -89,10 +96,28 @@ def api_create_container():
         app.logger.error(f"创建容器时发生错误: {str(e)}")
         return jsonify({"error": "服务器内部错误"}), 500
 
+@app.route('/api/delete_container', methods=['POST'])
+def api_delete_container():
+    try:
+        name = request.json.get('name')
+        container = Container.query.filter_by(name=name).first()
+        if container:
+            client.containers.get(name).remove(force=True)
+            db.session.delete(container)
+            db.session.commit()
+            return jsonify({"message": f"容器 {name} 已删除"}), 200
+        else:
+            return jsonify({"error": "容器不存在"}), 404
+    except Exception as e:
+        app.logger.error(f"删除容器时发生错误: {str(e)}")
+        return jsonify({"error": "服务器内部错误"}), 500
+
 @app.errorhandler(Exception)
 def handle_exception(e):
     app.logger.error(f"未捕获的异常: {str(e)}")
     return jsonify({"error": "服务器内部错误"}), 500
 
 if __name__ == '__main__':
+    with app.app_context():
+        db.create_all()
     app.run(host='0.0.0.0', port=88, debug=True)
