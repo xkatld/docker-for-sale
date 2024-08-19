@@ -31,7 +31,7 @@ docker build --target alpine -t ssh-alpine .
 # 启动web-api
 ```
 cd docker-for-sale/web/api/
-pip3 install flask docker
+pip3 install flask docker flask-sqlalchemy
 python3 app.py
 ```
 浏览器中访问 http://0.0.0.0:88 使用 Web 界面，或使用 API 客户端调用 /api/create_container 端点
