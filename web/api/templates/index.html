@@ -3,18 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>创建 Docker 容器</title>
+    <title>Docker 容器管理</title>
     <style>
-        body { font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }
-        form { display: flex; flex-direction: column; }
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        form { display: flex; flex-direction: column; margin-bottom: 20px; }
         label { margin-top: 10px; }
         input, select { margin-bottom: 10px; padding: 5px; }
         button { margin-top: 20px; padding: 10px; }
         #result { margin-top: 20px; white-space: pre-wrap; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
     </style>
 </head>
 <body>
-    <h1>创建 Docker 容器</h1>
+    <h1>Docker 容器管理</h1>
+    <h2>创建新容器</h2>
     <form id="containerForm">
         <label for="image">选择镜像:</label>
         <select id="image" name="image" required>
@@ -36,6 +40,30 @@
     </form>
 
     <div id="result"></div>
+
+    <h2>现有容器</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>名称</th>
+                <th>镜像</th>
+                <th>SSH 端口</th>
+                <th>NAT 端口范围</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for container in containers %}
+            <tr>
+                <td>{{ container.name }}</td>
+                <td>{{ container.image }}</td>
+                <td>{{ container.ssh_port }}</td>
+                <td>{{ container.nat_start_port }} - {{ container.nat_end_port }}</td>
+                <td><button onclick="deleteContainer('{{ container.name }}')">删除</button></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
 
     <script>
         document.getElementById('containerForm').addEventListener('submit', function(e) {
@@ -59,12 +87,39 @@
             })
             .then(result => {
                 document.getElementById('result').textContent = JSON.stringify(result, null, 2);
+                location.reload();  // 刷新页面以显示新容器
             })
             .catch(error => {
                 console.error('Error:', error);
                 document.getElementById('result').textContent = '错误: ' + (error.error || '未知错误');
             });
         });
+
+        function deleteContainer(name) {
+            if (confirm(`确定要删除容器 ${name} 吗？`)) {
+                fetch('/api/delete_container', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({name: name}),
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        return response.json().then(err => { throw err; });
+                    }
+                    return response.json();
+                })
+                .then(result => {
+                    alert(result.message);
+                    location.reload();  // 刷新页面以更新容器列表
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('删除失败: ' + (error.error || '未知错误'));
+                });
+            }
+        }
     </script>
 </body>
 </html>
