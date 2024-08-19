@@ -2,7 +2,7 @@
 docker销售系统，web前后端，api功能文档，镜像制作。
 # 环境
 基于Debian12开发
-```
+```shell
 apt update -y
 apt install docker.io python3 python3-pip git -y
 rm /usr/lib/python3.11/EXTERNALLY-MANAGED
@@ -11,7 +11,7 @@ systemctl restart docker
 git clone https://github.com/xkatld/docker-for-sale.git
 ```
 # 构建docker镜像
-```
+```shell
 cd docker-for-sale/image
 # 构建 Ubuntu 镜像
 docker build --target ubuntu -t ssh-ubuntu .
