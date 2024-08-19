@@ -5,6 +5,8 @@ import random
 
 app = Flask(__name__)
 
+client = docker.from_env()
+
 SUPPORTED_IMAGES = {
     'ssh-debian': 'ssh-debian',
     'ssh-ubuntu': 'ssh-ubuntu',
@@ -16,12 +18,10 @@ SUPPORTED_IMAGES = {
 
 def find_available_ports(ssh_range=(10000, 19999), nat_range=(20000, 65535), nat_count=500):
     used_ports = set()
-    client = docker.from_env()
     for container in client.containers.list():
-        ports = container.attrs['NetworkSettings']['Ports']
-        for port_mappings in ports.values():
-            if port_mappings:
-                used_ports.add(int(port_mappings[0]['HostPort']))
+        for port_config in container.ports.values():
+            if port_config:
+                used_ports.add(int(port_config[0]['HostPort']))
     
     available_ssh_ports = list(set(range(ssh_range[0], ssh_range[1] + 1)) - used_ports)
     available_nat_ports = list(set(range(nat_range[0], nat_range[1] + 1)) - used_ports)
@@ -34,9 +34,7 @@ def find_available_ports(ssh_range=(10000, 19999), nat_range=(20000, 65535), nat
     
     return ssh_port, nat_ports[0], nat_ports[-1]
 
-def create_container(image_key, name, cpu, memory, disk, bandwidth):
-    client = docker.from_env()
-
+def create_container(image_key, name, cpu, memory, bandwidth):
     if image_key not in SUPPORTED_IMAGES:
         raise ValueError("不支持的镜像类型")
 
@@ -51,9 +49,8 @@ def create_container(image_key, name, cpu, memory, disk, bandwidth):
         name=name,
         detach=True,
         cpu_period=100000,
-        cpu_quota=int(cpu * 100000),
+        cpu_quota=int(float(cpu) * 100000),
         mem_limit=f"{memory}m",
-        storage_opt={"size": f"{disk}G"},
         restart_policy={"Name": "always"},
         ports={'22/tcp': ssh_port}
     )
@@ -97,9 +94,8 @@ def api_create_container():
         result = create_container(
             data['image'],
             data['name'],
-            float(data['cpu']),
+            data['cpu'],
             int(data['memory']),
-            int(data['disk']),
             int(data['bandwidth'])
         )
         return jsonify(result), 200
