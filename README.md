@@ -31,5 +31,5 @@ docker build --target alpine -t ssh-alpine .
 # 启动web-api
 ```
 pip3 install flask docker
-python3 app.py
+python3 docker-for-sale/web/api/app.py
 ```
