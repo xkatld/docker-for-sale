@@ -1,6 +1,5 @@
 from flask import Flask, request, jsonify, render_template
 import docker
-import subprocess
 import random
 
 app = Flask(__name__)
@@ -34,7 +33,7 @@ def find_available_ports(ssh_range=(10000, 19999), nat_range=(20000, 65535), nat
     
     return ssh_port, nat_ports[0], nat_ports[-1]
 
-def create_container(image_key, name, cpu, memory, bandwidth):
+def create_container(image_key, name, cpu, memory):
     if image_key not in SUPPORTED_IMAGES:
         raise ValueError("不支持的镜像类型")
 
@@ -55,30 +54,7 @@ def create_container(image_key, name, cpu, memory, bandwidth):
         ports={'22/tcp': ssh_port}
     )
 
-    # 设置带宽限制
-    container_id = container.id[:12]
     container_ip = container.attrs['NetworkSettings']['IPAddress']
-    
-    try:
-        # 创建根 qdisc
-        subprocess.run(["tc", "qdisc", "add", "dev", "docker0", "root", "handle", "1:", "htb"], check=True)
-    except subprocess.CalledProcessError:
-        # 如果已经存在，则替换
-        subprocess.run(["tc", "qdisc", "replace", "dev", "docker0", "root", "handle", "1:", "htb"], check=True)
-
-    # 创建限速的 class
-    class_id = f"1:{container_id}"
-    subprocess.run(["tc", "class", "add", "dev", "docker0", "parent", "1:", "classid", class_id, "htb", "rate", f"{bandwidth}mbit"], check=True)
-
-    # 为容器 IP 添加过滤规则
-    subprocess.run(["tc", "filter", "add", "dev", "docker0", "protocol", "ip", "parent", "1:0", "prio", "1", "u32", "match", "ip", "dst", container_ip, "flowid", class_id], check=True)
-
-    # 设置 NAT 端口转发
-    for port in range(nat_start_port, nat_end_port + 1):
-        subprocess.run([
-            "iptables", "-t", "nat", "-A", "PREROUTING", "-p", "tcp", "--dport", str(port),
-            "-j", "DNAT", "--to", f"{container_ip}:{port}"
-        ], check=True)
 
     return {
         "name": name,
@@ -104,8 +80,7 @@ def api_create_container():
             data.get('image'),
             data.get('name'),
             data.get('cpu'),
-            int(data.get('memory', 0)),
-            int(data.get('bandwidth', 0))
+            int(data.get('memory', 0))
         )
         return jsonify(result), 200
     except ValueError as e:
