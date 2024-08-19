@@ -16,8 +16,12 @@
 <body>
     <h1>创建 Docker 容器</h1>
     <form id="containerForm">
-        <label for="image">Docker 镜像:</label>
-        <input type="text" id="image" name="image" required>
+        <label for="image">选择镜像:</label>
+        <select id="image" name="image" required>
+            {% for image in images %}
+            <option value="{{ image }}">{{ image }}</option>
+            {% endfor %}
+        </select>
 
         <label for="name">容器名称:</label>
         <input type="text" id="name" name="name" required>
