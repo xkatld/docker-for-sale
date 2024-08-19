@@ -57,27 +57,33 @@ def create_container(image_key, name, cpu, memory, bandwidth):
 
     # 设置带宽限制
     container_id = container.id[:12]
-    subprocess.run([
-        "tc", "qdisc", "add", "dev", f"docker0", "root", "handle", "1:", "htb", "default", "10"
-    ])
-    subprocess.run([
-        "tc", "class", "add", "dev", f"docker0", "parent", "1:", "classid", "1:1", "htb", "rate", f"{bandwidth}mbit"
-    ])
-    subprocess.run([
-        "tc", "filter", "add", "dev", f"docker0", "protocol", "ip", "parent", "1:0", "prio", "1", "u32", "match", "ip", "dst", container.attrs['NetworkSettings']['IPAddress'], "flowid", "1:1"
-    ])
+    container_ip = container.attrs['NetworkSettings']['IPAddress']
+    
+    try:
+        # 创建根 qdisc
+        subprocess.run(["tc", "qdisc", "add", "dev", "docker0", "root", "handle", "1:", "htb"], check=True)
+    except subprocess.CalledProcessError:
+        # 如果已经存在，则替换
+        subprocess.run(["tc", "qdisc", "replace", "dev", "docker0", "root", "handle", "1:", "htb"], check=True)
+
+    # 创建限速的 class
+    class_id = f"1:{container_id}"
+    subprocess.run(["tc", "class", "add", "dev", "docker0", "parent", "1:", "classid", class_id, "htb", "rate", f"{bandwidth}mbit"], check=True)
+
+    # 为容器 IP 添加过滤规则
+    subprocess.run(["tc", "filter", "add", "dev", "docker0", "protocol", "ip", "parent", "1:0", "prio", "1", "u32", "match", "ip", "dst", container_ip, "flowid", class_id], check=True)
 
     # 设置 NAT 端口转发
     for port in range(nat_start_port, nat_end_port + 1):
         subprocess.run([
             "iptables", "-t", "nat", "-A", "PREROUTING", "-p", "tcp", "--dport", str(port),
-            "-j", "DNAT", "--to", f"{container.attrs['NetworkSettings']['IPAddress']}:{port}"
-        ])
+            "-j", "DNAT", "--to", f"{container_ip}:{port}"
+        ], check=True)
 
     return {
         "name": name,
         "image": image,
-        "ip": container.attrs['NetworkSettings']['IPAddress'],
+        "ip": container_ip,
         "ssh_port": ssh_port,
         "nat_start_port": nat_start_port,
         "nat_end_port": nat_end_port
@@ -89,18 +95,29 @@ def index():
 
 @app.route('/api/create_container', methods=['POST'])
 def api_create_container():
-    data = request.json
     try:
+        data = request.json
+        if not data:
+            return jsonify({"error": "无效的 JSON 数据"}), 400
+
         result = create_container(
-            data['image'],
-            data['name'],
-            data['cpu'],
-            int(data['memory']),
-            int(data['bandwidth'])
+            data.get('image'),
+            data.get('name'),
+            data.get('cpu'),
+            int(data.get('memory', 0)),
+            int(data.get('bandwidth', 0))
         )
         return jsonify(result), 200
-    except Exception as e:
+    except ValueError as e:
         return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        app.logger.error(f"创建容器时发生错误: {str(e)}")
+        return jsonify({"error": "服务器内部错误"}), 500
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    app.logger.error(f"未捕获的异常: {str(e)}")
+    return jsonify({"error": "服务器内部错误"}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=88, debug=True)
