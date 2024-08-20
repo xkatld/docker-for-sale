@@ -8,7 +8,6 @@ import json
 import time
 import warnings
 import urllib3
-from werkzeug.exceptions import HTTPException
 
 warnings.filterwarnings("ignore", category=urllib3.exceptions.InsecureRequestWarning)
 
@@ -39,6 +38,9 @@ class Container(db.Model):
     nat_end_port = db.Column(db.Integer, unique=True, nullable=False)
     disk_size = db.Column(db.String(20), nullable=False)
 
+# 创建一个队列来存储待创建的容器
+container_queue = queue.Queue()
+
 def find_available_port_range(start, end, count):
     used_ranges = Container.query.with_entities(Container.nat_start_port, Container.nat_end_port).all()
     available_ranges = set(range(start, end + 1, count))
@@ -62,6 +64,7 @@ def create_container(image_key, cpu, memory, disk_size):
 
     logger.info(f"创建容器，镜像: {image}, SSH端口: {ssh_port}, NAT端口: {nat_start_port}-{nat_end_port}, 磁盘大小: {disk_size}")
 
+    # 创建带有大小限制的卷
     volume_name = f"volume_{ssh_port}"
     client.volumes.create(name=volume_name, driver="local", driver_opts={"type": "tmpfs", "device": "tmpfs", "o": f"size={disk_size}"})
 
@@ -76,7 +79,7 @@ def create_container(image_key, cpu, memory, disk_size):
         cpu_period=100000,
         cpu_quota=int(float(cpu) * 100000),
         mem_limit=f"{memory}m",
-        memswap_limit=f"{memory}m",
+        memswap_limit=f"{memory}m",  # 限制 swap 使用
         restart_policy={"Name": "always"},
         ports=port_bindings,
         volumes={volume_name: {'bind': '/mnt/data', 'mode': 'rw'}}
@@ -105,6 +108,23 @@ def create_container(image_key, cpu, memory, disk_size):
         "disk_size": disk_size
     }
 
+@app.route('/favicon.ico')
+def favicon():
+    return send_from_directory(os.path.join(app.root_path, 'static'),
+                               'favicon.ico', mimetype='image/vnd.microsoft.icon')
+
+def container_creator():
+    while True:
+        task = container_queue.get()
+        try:
+            create_container(**task)
+        except Exception as e:
+            logger.error(f"创建容器时发生错误: {str(e)}")
+        container_queue.task_done()
+
+# 启动容器创建线程
+threading.Thread(target=container_creator, daemon=True).start()
+
 @app.route('/')
 def index():
     return render_template('index.html', images=SUPPORTED_IMAGES.keys())
@@ -121,19 +141,39 @@ def api_create_container():
         if not data:
             return jsonify({"error": "无效的 JSON 数据"}), 400
 
-        result = create_container(
-            data.get('image'),
-            data.get('cpu'),
-            int(data.get('memory', 64)),
-            data.get('disk_size', '1G')
-        )
-        return jsonify(result), 200
+        count = int(data.get('count', 1))
+        
+        for _ in range(count):
+            container_queue.put({
+                'image_key': data.get('image'),
+                'cpu': data.get('cpu'),
+                'memory': int(data.get('memory', 64)),  # 默认使用64MB
+                'disk_size': data.get('disk_size', '1G')
+            })
+
+        return jsonify({"message": f"已添加 {count} 个容器到创建队列"}), 202
     except ValueError as e:
         logger.error(f"无效输入: {str(e)}")
         return jsonify({"error": str(e)}), 400
     except Exception as e:
-        logger.error(f"创建容器时发生错误: {str(e)}")
+        logger.error(f"添加容器到队列时发生错误: {str(e)}")
         return jsonify({"error": "服务器内部错误"}), 500
+
+@app.route('/api/container_count')
+def container_count():
+    count = Container.query.count()
+    return jsonify({"count": count})
+
+@app.route('/api/container_stats/<container_id>')
+def container_stats(container_id):
+    def generate():
+        container = client.containers.get(container_id)
+        while True:
+            stats = container.stats(stream=False)
+            yield f"data: {json.dumps(stats)}\n\n"
+            time.sleep(1)
+    
+    return Response(generate(), mimetype='text/event-stream')
 
 @app.route('/api/delete_container', methods=['POST'])
 def api_delete_container():
@@ -142,13 +182,12 @@ def api_delete_container():
         container = Container.query.get(container_id)
         if container:
             logger.info(f"正在删除容器: {container_id}")
-            try:
-                docker_container = client.containers.get(container_id)
-                docker_container.remove(force=True)
-                logger.info(f"Docker 容器 {container_id} 已删除")
-            except docker.errors.NotFound:
-                logger.warning(f"Docker 容器 {container_id} 不存在，可能已被删除")
-            
+            # 删除 Docker 容器
+            docker_container = client.containers.get(container_id)
+            docker_container.remove(force=True)
+            logger.info(f"Docker 容器 {container_id} 已删除")
+
+            # 删除对应的卷
             volume_name = f"volume_{container.ssh_port}"
             try:
                 volume = client.volumes.get(volume_name)
@@ -157,6 +196,7 @@ def api_delete_container():
             except docker.errors.NotFound:
                 logger.warning(f"卷 {volume_name} 不存在，无需删除")
 
+            # 从数据库中删除记录
             db.session.delete(container)
             db.session.commit()
             logger.info(f"容器 {container_id} 已从数据库中删除")
@@ -180,39 +220,31 @@ def api_delete_containers():
             container = Container.query.get(container_id)
             if container:
                 try:
+                    # 删除 Docker 容器
                     docker_container = client.containers.get(container_id)
                     docker_container.remove(force=True)
                     logger.info(f"Docker 容器 {container_id} 已删除")
-                except docker.errors.NotFound:
-                    logger.warning(f"Docker 容器 {container_id} 不存在，可能已被删除")
 
-                volume_name = f"volume_{container.ssh_port}"
-                try:
-                    volume = client.volumes.get(volume_name)
-                    volume.remove(force=True)
-                    logger.info(f"卷 {volume_name} 已删除")
-                except docker.errors.NotFound:
-                    logger.warning(f"卷 {volume_name} 不存在，无需删除")
+                    # 删除对应的卷
+                    volume_name = f"volume_{container.ssh_port}"
+                    try:
+                        volume = client.volumes.get(volume_name)
+                        volume.remove(force=True)
+                        logger.info(f"卷 {volume_name} 已删除")
+                    except docker.errors.NotFound:
+                        logger.warning(f"卷 {volume_name} 不存在，无需删除")
 
-                db.session.delete(container)
-                deleted_count += 1
+                    # 从数据库中删除记录
+                    db.session.delete(container)
+                    deleted_count += 1
+                except Exception as e:
+                    logger.error(f"删除容器 {container_id} 时发生错误: {str(e)}")
 
         db.session.commit()
         return jsonify({"message": f"成功删除 {deleted_count} 个容器"}), 200
     except Exception as e:
         logger.error(f"批量删除容器时发生错误: {str(e)}")
         return jsonify({"error": "服务器内部错误"}), 500
-
-@app.route('/api/container_stats/<container_id>')
-def container_stats(container_id):
-    def generate():
-        container = client.containers.get(container_id)
-        while True:
-            stats = container.stats(stream=False)
-            yield f"data: {json.dumps(stats)}\n\n"
-            time.sleep(1)
-    
-    return Response(generate(), mimetype='text/event-stream')
 
 @app.route('/api/sync_containers', methods=['POST'])
 def api_sync_containers():
@@ -230,6 +262,7 @@ def api_sync_containers():
 
         db.session.commit()
 
+        # 检查并清理孤立的卷
         volumes = client.volumes.list()
         removed_volumes = 0
         for volume in volumes:
@@ -247,11 +280,6 @@ def api_sync_containers():
     except Exception as e:
         logger.error(f"同步容器时发生错误: {str(e)}")
         return jsonify({"error": "同步过程中发生错误"}), 500
-
-@app.route('/favicon.ico')
-def favicon():
-    return send_from_directory(os.path.join(app.root_path, 'static'),
-                               'favicon.ico', mimetype='image/vnd.microsoft.icon')
 
 @app.errorhandler(Exception)
 def handle_exception(e):
