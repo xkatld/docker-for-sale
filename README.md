@@ -3,34 +3,32 @@ docker销售系统，web前后端，api功能文档，镜像制作。
 # 环境
 基于Debian12,docker,python3开发
 ```shell
+apt update -y
+apt install wget curl sudo git screen nano unzip -y
 git clone https://github.com/xkatld/docker-for-sale.git
-cd docker-for-sale
-chmod +x setup.sh
-sudo setup.sh
+chmod +x ./docker-for-sale/setup.sh
+bash ./docker-for-sale/setup.sh
 ```
 # 构建docker镜像
 ```shell
-cd docker-for-sale/image
 # 构建 Ubuntu 镜像
-docker build --target ubuntu -t ssh-ubuntu .
+docker build --target ubuntu -t ssh-ubuntu ./docker-for-sale/image
 # 构建 Debian 镜像
-docker build --target debian -t ssh-debian .
+docker build --target debian -t ssh-debian ./docker-for-sale/image
 # 构建 CentOS 镜像
-docker build --target centos -t ssh-centos .
+docker build --target centos -t ssh-centos ./docker-for-sale/image
 # 构建 Fedora 镜像
-docker build --target fedora -t ssh-fedora .
+docker build --target fedora -t ssh-fedora ./docker-for-sale/image
 # 构建 Arch Linux 镜像
-docker build --target arch -t ssh-arch .
+docker build --target arch -t ssh-arch ./docker-for-sale/image
 # 构建 Alpine Linux 镜像
-docker build --target alpine -t ssh-alpine .
+docker build --target alpine -t ssh-alpine ./docker-for-sale/image
 ```
 默认端口密码都是22/password
 
 # 启动web-api
 ```
-cd docker-for-sale/web/api/
-pip3 install flask docker flask-sqlalchemy
-python3 app.py
+python3 ./docker-for-sale/web/api/app.py
 ```
 浏览器中访问 http://0.0.0.0:88 使用 Web 界面，或使用 API 客户端调用 /api/create_container 端点
 API 使用示例（使用 curl）：
