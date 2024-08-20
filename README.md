@@ -43,8 +43,9 @@ curl -X POST http://0.0.0.0:88/api/create_container \
      -H "Content-Type: application/json" \
      -d '{
          "image": "ssh-ubuntu",
-         "cpu": 0.5,
-         "memory": 512
+         "cpu": "1",
+         "memory": 512,
+         "disk_size": "2G"
      }'
 
 #删除容器（假设容器 ID 为 "35195543422b"）：
