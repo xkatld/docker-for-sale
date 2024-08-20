@@ -1,6 +1,7 @@
 # docker-for-sale
 docker销售系统，web前后端，api功能文档，镜像制作。
 本来想慢慢的写个销售系统的，但是发现不能对docker流量宽带限制，目前只能当作docker-web管理面板。。。
+目前：支持自定义镜像，批量开机，批量删除，监控检测，ssh和nat端口范围
 # 环境
 基于Debian12,docker,python3开发
 ```shell
@@ -56,3 +57,6 @@ curl -X POST http://0.0.0.0:88/api/delete_container \
          "id": "35195543422b"
      }'
 ```
+# 演示
+![image](https://github.com/user-attachments/assets/d3333955-90f9-4dfb-b8bd-d73722af9064)
+![image](https://github.com/user-attachments/assets/d738457a-2269-4b3e-b9d4-681b4493164e)
