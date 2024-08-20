@@ -38,8 +38,6 @@ python3 app.py
 API 使用示例（使用 curl）：
 ```
 #创建容器：
-
-<BASH>
 curl -X POST http://0.0.0.0:88/api/create_container \
      -H "Content-Type: application/json" \
      -d '{
@@ -47,9 +45,8 @@ curl -X POST http://0.0.0.0:88/api/create_container \
          "cpu": 0.5,
          "memory": 512
      }'
-#删除容器（假设容器 ID 为 "abc123"）：
 
-<BASH>
+#删除容器（假设容器 ID 为 "abc123"）：
 curl -X POST http://0.0.0.0:88/api/delete_container \
      -H "Content-Type: application/json" \
      -d '{
