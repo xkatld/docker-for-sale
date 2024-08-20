@@ -29,6 +29,7 @@ class Container(db.Model):
     ssh_port = db.Column(db.Integer, unique=True, nullable=False)
     nat_start_port = db.Column(db.Integer, unique=True, nullable=False)
     nat_end_port = db.Column(db.Integer, unique=True, nullable=False)
+    disk_size = db.Column(db.String(20), nullable=False)  # 新增字段
 
 def find_available_port_range(start, end, count):
     used_ranges = Container.query.with_entities(Container.nat_start_port, Container.nat_end_port).all()
@@ -37,7 +38,7 @@ def find_available_port_range(start, end, count):
         available_ranges -= set(range(used_start, used_end + 1, count))
     return random.choice(list(available_ranges)) if available_ranges else None
 
-def create_container(image_key, cpu, memory):
+def create_container(image_key, cpu, memory, disk_size):
     if image_key not in SUPPORTED_IMAGES:
         raise ValueError("不支持的镜像类型")
 
@@ -51,7 +52,11 @@ def create_container(image_key, cpu, memory):
 
     nat_end_port = nat_start_port + 99
 
-    logger.info(f"创建容器，镜像: {image}, SSH端口: {ssh_port}, NAT端口: {nat_start_port}-{nat_end_port}")
+    logger.info(f"创建容器，镜像: {image}, SSH端口: {ssh_port}, NAT端口: {nat_start_port}-{nat_end_port}, 磁盘大小: {disk_size}")
+
+    # 创建带有大小限制的卷
+    volume_name = f"volume_{ssh_port}"
+    client.volumes.create(name=volume_name, driver="local", driver_opts={"type": "tmpfs", "device": "tmpfs", "o": f"size={disk_size}"})
 
     port_bindings = {
         '22/tcp': ssh_port,
@@ -65,7 +70,8 @@ def create_container(image_key, cpu, memory):
         cpu_quota=int(float(cpu) * 100000),
         mem_limit=f"{memory}m",
         restart_policy={"Name": "always"},
-        ports=port_bindings
+        ports=port_bindings,
+        volumes={volume_name: {'bind': '/mnt/data', 'mode': 'rw'}}  # 挂载卷
     )
 
     container_id = container.id[:12]
@@ -74,7 +80,8 @@ def create_container(image_key, cpu, memory):
     logger.info(f"容器创建成功，ID: {container_id}, IP: {container_ip}")
 
     new_container = Container(id=container_id, image=image, ssh_port=ssh_port,
-                              nat_start_port=nat_start_port, nat_end_port=nat_end_port)
+                              nat_start_port=nat_start_port, nat_end_port=nat_end_port,
+                              disk_size=disk_size)
     db.session.add(new_container)
     db.session.commit()
 
@@ -86,7 +93,8 @@ def create_container(image_key, cpu, memory):
         "ip": container_ip,
         "ssh_port": ssh_port,
         "nat_start_port": nat_start_port,
-        "nat_end_port": nat_end_port
+        "nat_end_port": nat_end_port,
+        "disk_size": disk_size
     }
 
 @app.route('/')
@@ -104,7 +112,8 @@ def api_create_container():
         result = create_container(
             data.get('image'),
             data.get('cpu'),
-            int(data.get('memory', 0))
+            int(data.get('memory', 0)),
+            data.get('disk_size', '1G')  # 默认1G if not specified
         )
         return jsonify(result), 200
     except ValueError as e:
@@ -125,6 +134,15 @@ def api_delete_container():
             docker_container = client.containers.get(container_id)
             docker_container.remove(force=True)
             logger.info(f"Docker 容器 {container_id} 已删除")
+
+            # 删除对应的卷
+            volume_name = f"volume_{container.ssh_port}"
+            try:
+                volume = client.volumes.get(volume_name)
+                volume.remove(force=True)
+                logger.info(f"卷 {volume_name} 已删除")
+            except docker.errors.NotFound:
+                logger.warning(f"卷 {volume_name} 不存在，无需删除")
 
             # 从数据库中删除记录
             db.session.delete(container)
