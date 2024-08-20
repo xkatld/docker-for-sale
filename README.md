@@ -25,10 +25,10 @@ docker build --target arch -t ssh-arch ./docker-for-sale/image
 docker build --target alpine -t ssh-alpine ./docker-for-sale/image
 ```
 默认端口密码都是22/password
-bash ./docker-for-sale/image/images.sh
+
 ```
 #也可以使用脚本直接完成构建
-
+bash ./docker-for-sale/image/images.sh
 ```
 
 # 启动web-api
