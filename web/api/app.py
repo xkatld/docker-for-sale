@@ -3,12 +3,15 @@ from flask_sqlalchemy import SQLAlchemy
 import docker
 import random
 import subprocess
-import os
+import logging
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///containers.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
+
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 client = docker.from_env()
 
@@ -22,7 +25,7 @@ SUPPORTED_IMAGES = {
 }
 
 class Container(db.Model):
-    id = db.Column(db.String(12), primary_key=True)  # 使用短 ID（12 字符）
+    id = db.Column(db.String(12), primary_key=True)
     image = db.Column(db.String(80), nullable=False)
     ssh_port = db.Column(db.Integer, unique=True, nullable=False)
     nat_start_port = db.Column(db.Integer, unique=True, nullable=False)
@@ -34,6 +37,33 @@ def find_available_port(start, end):
     used_ports.update(Container.query.with_entities(Container.nat_end_port).all())
     available_ports = set(range(start, end + 1)) - used_ports
     return random.choice(list(available_ports)) if available_ports else None
+
+def add_iptables_rule(dport, to_destination):
+    cmd = f"iptables -t nat -A PREROUTING -p tcp --dport {dport} -j DNAT --to-destination {to_destination}"
+    logger.debug(f"添加 iptables 规则: {cmd}")
+    try:
+        subprocess.run(cmd, shell=True, check=True, capture_output=True, text=True)
+        logger.info(f"成功添加 iptables 规则，端口 {dport} 到 {to_destination}")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"添加 iptables 规则失败: {e.stdout} {e.stderr}")
+        raise
+
+def remove_iptables_rule(dport, to_destination):
+    cmd = f"iptables -t nat -D PREROUTING -p tcp --dport {dport} -j DNAT --to-destination {to_destination}"
+    logger.debug(f"删除 iptables 规则: {cmd}")
+    try:
+        subprocess.run(cmd, shell=True, check=True, capture_output=True, text=True)
+        logger.info(f"成功删除 iptables 规则，端口 {dport} 到 {to_destination}")
+    except subprocess.CalledProcessError as e:
+        logger.warning(f"删除 iptables 规则失败 (可能不存在): {e.stdout} {e.stderr}")
+
+def save_iptables_rules():
+    cmd = "iptables-save > /etc/iptables/rules.v4"
+    try:
+        subprocess.run(cmd, shell=True, check=True)
+        logger.info("iptables 规则已保存到 /etc/iptables/rules.v4")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"保存 iptables 规则失败: {e}")
 
 def create_container(image_key, cpu, memory):
     if image_key not in SUPPORTED_IMAGES:
@@ -48,6 +78,8 @@ def create_container(image_key, cpu, memory):
     if not all([ssh_port, nat_start_port]):
         raise Exception("没有足够的可用端口")
 
+    logger.info(f"创建容器，镜像: {image}, SSH端口: {ssh_port}, NAT端口: {nat_start_port}-{nat_end_port}")
+
     container = client.containers.run(
         image,
         detach=True,
@@ -58,40 +90,33 @@ def create_container(image_key, cpu, memory):
         ports={'22/tcp': ssh_port}
     )
 
-    container_id = container.id[:12]  # 使用短 ID
+    container_id = container.id[:12]
     container_ip = container.attrs['NetworkSettings']['IPAddress']
 
-    # 设置 NAT 端口转发规则
-    nat_rules = []
-    for port in range(nat_start_port, nat_end_port + 1):
-        rule = [
-            "iptables",
-            "-t", "nat",
-            "-A", "PREROUTING",
-            "-p", "tcp",
-            "--dport", str(port),
-            "-j", "DNAT",
-            "--to-destination", f"{container_ip}:{port}"
-        ]
-        try:
-            subprocess.run(rule, check=True)
-            nat_rules.append(rule)
-        except subprocess.CalledProcessError as e:
-            app.logger.error(f"设置 NAT 规则失败: {e}")
-            # 如果设置失败，删除已添加的规则
-            for added_rule in nat_rules:
-                try:
-                    added_rule[3] = "-D"  # 将 -A 改为 -D 以删除规则
-                    subprocess.run(added_rule, check=True)
-                except subprocess.CalledProcessError:
-                    pass
-            container.remove(force=True)
-            raise Exception("设置 NAT 规则失败")
+    logger.info(f"容器创建成功，ID: {container_id}, IP: {container_ip}")
+
+    # 设置 iptables 规则
+    added_rules = []
+    try:
+        for port in range(nat_start_port, nat_end_port + 1):
+            add_iptables_rule(port, f"{container_ip}:{port}")
+            added_rules.append(port)
+        save_iptables_rules()
+    except Exception as e:
+        logger.error(f"设置 iptables 规则失败: {str(e)}")
+        # 如果设置失败，删除已添加的规则
+        for port in added_rules:
+            remove_iptables_rule(port, f"{container_ip}:{port}")
+        container.remove(force=True)
+        save_iptables_rules()
+        raise Exception("设置 iptables 规则失败")
 
     new_container = Container(id=container_id, image=image, ssh_port=ssh_port,
                               nat_start_port=nat_start_port, nat_end_port=nat_end_port)
     db.session.add(new_container)
     db.session.commit()
+
+    logger.info(f"容器 {container_id} 创建成功并添加到数据库")
 
     return {
         "id": container_id,
@@ -121,9 +146,10 @@ def api_create_container():
         )
         return jsonify(result), 200
     except ValueError as e:
+        logger.error(f"无效输入: {str(e)}")
         return jsonify({"error": str(e)}), 400
     except Exception as e:
-        app.logger.error(f"创建容器时发生错误: {str(e)}")
+        logger.error(f"创建容器时发生错误: {str(e)}")
         return jsonify({"error": "服务器内部错误"}), 500
 
 @app.route('/api/delete_container', methods=['POST'])
@@ -132,44 +158,37 @@ def api_delete_container():
         container_id = request.json.get('id')
         container = Container.query.get(container_id)
         if container:
+            logger.info(f"正在删除容器: {container_id}")
             # 删除 Docker 容器
             docker_container = client.containers.get(container_id)
             container_ip = docker_container.attrs['NetworkSettings']['IPAddress']
             docker_container.remove(force=True)
+            logger.info(f"Docker 容器 {container_id} 已删除")
 
-            # 清理 NAT 规则
+            # 清理 iptables 规则
             for port in range(container.nat_start_port, container.nat_end_port + 1):
-                rule = [
-                    "iptables",
-                    "-t", "nat",
-                    "-D", "PREROUTING",
-                    "-p", "tcp",
-                    "--dport", str(port),
-                    "-j", "DNAT",
-                    "--to-destination", f"{container_ip}:{port}"
-                ]
-                try:
-                    subprocess.run(rule, check=True)
-                except subprocess.CalledProcessError as e:
-                    # 如果规则不存在，记录警告但继续执行
-                    app.logger.warning(f"删除 NAT 规则失败 (可能不存在): {e}")
+                remove_iptables_rule(port, f"{container_ip}:{port}")
+            save_iptables_rules()
 
             # 从数据库中删除记录
             db.session.delete(container)
             db.session.commit()
+            logger.info(f"容器 {container_id} 已从数据库中删除")
             return jsonify({"message": f"容器 {container_id} 已删除"}), 200
         else:
+            logger.warning(f"尝试删除不存在的容器: {container_id}")
             return jsonify({"error": "容器不存在"}), 404
     except Exception as e:
-        app.logger.error(f"删除容器时发生错误: {str(e)}")
+        logger.error(f"删除容器时发生错误: {str(e)}")
         return jsonify({"error": "服务器内部错误"}), 500
 
 @app.errorhandler(Exception)
 def handle_exception(e):
-    app.logger.error(f"未捕获的异常: {str(e)}")
+    logger.error(f"未捕获的异常: {str(e)}")
     return jsonify({"error": "服务器内部错误"}), 500
 
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
+    logger.info("启动应用")
     app.run(host='0.0.0.0', port=88, debug=True)
