@@ -1,8 +1,10 @@
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, Response
 from flask_sqlalchemy import SQLAlchemy
 import docker
 import random
 import logging
+import json
+import time
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///containers.db'
@@ -29,7 +31,7 @@ class Container(db.Model):
     ssh_port = db.Column(db.Integer, unique=True, nullable=False)
     nat_start_port = db.Column(db.Integer, unique=True, nullable=False)
     nat_end_port = db.Column(db.Integer, unique=True, nullable=False)
-    disk_size = db.Column(db.String(20), nullable=False)  # 新增字段
+    disk_size = db.Column(db.String(20), nullable=False)
 
 def find_available_port_range(start, end, count):
     used_ranges = Container.query.with_entities(Container.nat_start_port, Container.nat_end_port).all()
@@ -99,8 +101,12 @@ def create_container(image_key, cpu, memory, disk_size):
 
 @app.route('/')
 def index():
+    return render_template('index.html', images=SUPPORTED_IMAGES.keys())
+
+@app.route('/containers')
+def containers():
     containers = Container.query.all()
-    return render_template('index.html', images=SUPPORTED_IMAGES.keys(), containers=containers)
+    return render_template('containers.html', containers=containers)
 
 @app.route('/api/create_container', methods=['POST'])
 def api_create_container():
@@ -109,19 +115,36 @@ def api_create_container():
         if not data:
             return jsonify({"error": "无效的 JSON 数据"}), 400
 
-        result = create_container(
-            data.get('image'),
-            data.get('cpu'),
-            int(data.get('memory', 0)),
-            data.get('disk_size', '1G')  # 默认1G if not specified
-        )
-        return jsonify(result), 200
+        count = int(data.get('count', 1))
+        results = []
+
+        for _ in range(count):
+            result = create_container(
+                data.get('image'),
+                data.get('cpu'),
+                int(data.get('memory', 0)),
+                data.get('disk_size', '1G')
+            )
+            results.append(result)
+
+        return jsonify(results), 200
     except ValueError as e:
         logger.error(f"无效输入: {str(e)}")
         return jsonify({"error": str(e)}), 400
     except Exception as e:
         logger.error(f"创建容器时发生错误: {str(e)}")
         return jsonify({"error": "服务器内部错误"}), 500
+
+@app.route('/api/container_stats/<container_id>')
+def container_stats(container_id):
+    def generate():
+        container = client.containers.get(container_id)
+        while True:
+            stats = container.stats(stream=False)
+            yield f"data: {json.dumps(stats)}\n\n"
+            time.sleep(1)
+    
+    return Response(generate(), mimetype='text/event-stream')
 
 @app.route('/api/delete_container', methods=['POST'])
 def api_delete_container():
