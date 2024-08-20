@@ -27,9 +27,6 @@
             {% endfor %}
         </select>
 
-        <label for="name">容器名称:</label>
-        <input type="text" id="name" name="name" required>
-
         <label for="cpu">CPU 核心数:</label>
         <input type="number" id="cpu" name="cpu" step="0.1" min="0.1" required>
 
@@ -45,7 +42,7 @@
     <table>
         <thead>
             <tr>
-                <th>名称</th>
+                <th>容器 ID</th>
                 <th>镜像</th>
                 <th>SSH 端口</th>
                 <th>NAT 端口范围</th>
@@ -55,11 +52,11 @@
         <tbody>
             {% for container in containers %}
             <tr>
-                <td>{{ container.name }}</td>
+                <td>{{ container.id }}</td>
                 <td>{{ container.image }}</td>
                 <td>{{ container.ssh_port }}</td>
                 <td>{{ container.nat_start_port }} - {{ container.nat_end_port }}</td>
-                <td><button onclick="deleteContainer('{{ container.name }}')">删除</button></td>
+                <td><button onclick="deleteContainer('{{ container.id }}')">删除</button></td>
             </tr>
             {% endfor %}
         </tbody>
@@ -95,14 +92,14 @@
             });
         });
 
-        function deleteContainer(name) {
-            if (confirm(`确定要删除容器 ${name} 吗？`)) {
+        function deleteContainer(id) {
+            if (confirm(`确定要删除容器 ${id} 吗？`)) {
                 fetch('/api/delete_container', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({name: name}),
+                    body: JSON.stringify({id: id}),
                 })
                 .then(response => {
                     if (!response.ok) {
