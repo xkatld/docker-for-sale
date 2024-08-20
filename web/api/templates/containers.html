@@ -41,11 +41,16 @@
         </div>
     </nav>
 
-    <div class="container">
-        <h5 class="mb-3">现有容器</h5>
-        <button id="deleteSelectedBtn" class="btn btn-danger btn-sm mb-3" style="display: none;">
-            <i class="bi bi-trash"></i> 删除选中的容器
+<div class="container">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5>现有容器</h5>
+        <button id="syncContainersBtn" class="btn btn-primary btn-sm">
+            <i class="bi bi-arrow-repeat"></i> 检查并修正容器
         </button>
+    </div>
+    <button id="deleteSelectedBtn" class="btn btn-danger btn-sm mb-3" style="display: none;">
+        <i class="bi bi-trash"></i> 删除选中的容器
+    </button>
         <div class="row row-cols-1 row-cols-md-2 g-4" id="containerList">
             {% for container in containers %}
             <div class="col">
