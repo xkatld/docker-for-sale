@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify, render_template
 from flask_sqlalchemy import SQLAlchemy
 import docker
 import random
+import subprocess
 import os
 
 app = Flask(__name__)
@@ -30,6 +31,8 @@ class Container(db.Model):
 
 def find_available_port(start, end):
     used_ports = set(Container.query.with_entities(Container.ssh_port).all())
+    used_ports.update(Container.query.with_entities(Container.nat_start_port).all())
+    used_ports.update(Container.query.with_entities(Container.nat_end_port).all())
     available_ports = set(range(start, end + 1)) - used_ports
     return random.choice(list(available_ports)) if available_ports else None
 
@@ -57,6 +60,24 @@ def create_container(image_key, name, cpu, memory):
         ports={'22/tcp': ssh_port}
     )
 
+    container_ip = container.attrs['NetworkSettings']['IPAddress']
+
+    # 设置 NAT 端口转发规则
+    for port in range(nat_start_port, nat_end_port + 1):
+        try:
+            subprocess.run([
+                "iptables",
+                "-t", "nat",
+                "-A", "PREROUTING",
+                "-p", "tcp",
+                "--dport", str(port),
+                "-j", "DNAT",
+                "--to-destination", f"{container_ip}:{port}"
+            ], check=True)
+        except subprocess.CalledProcessError as e:
+            app.logger.error(f"设置 NAT 规则失败: {e}")
+            # 如果设置失败，可以选择继续或者抛出异常
+
     new_container = Container(name=name, image=image, ssh_port=ssh_port,
                               nat_start_port=nat_start_port, nat_end_port=nat_end_port)
     db.session.add(new_container)
@@ -65,7 +86,7 @@ def create_container(image_key, name, cpu, memory):
     return {
         "name": name,
         "image": image,
-        "ip": container.attrs['NetworkSettings']['IPAddress'],
+        "ip": container_ip,
         "ssh_port": ssh_port,
         "nat_start_port": nat_start_port,
         "nat_end_port": nat_end_port
@@ -102,7 +123,28 @@ def api_delete_container():
         name = request.json.get('name')
         container = Container.query.filter_by(name=name).first()
         if container:
-            client.containers.get(name).remove(force=True)
+            # 删除 Docker 容器
+            docker_container = client.containers.get(name)
+            container_ip = docker_container.attrs['NetworkSettings']['IPAddress']
+            docker_container.remove(force=True)
+
+            # 清理 NAT 规则
+            for port in range(container.nat_start_port, container.nat_end_port + 1):
+                try:
+                    subprocess.run([
+                        "iptables",
+                        "-t", "nat",
+                        "-D", "PREROUTING",
+                        "-p", "tcp",
+                        "--dport", str(port),
+                        "-j", "DNAT",
+                        "--to-destination", f"{container_ip}:{port}"
+                    ], check=True)
+                except subprocess.CalledProcessError as e:
+                    app.logger.error(f"删除 NAT 规则失败: {e}")
+                    # 如果删除失败，可以选择继续或者抛出异常
+
+            # 从数据库中删除记录
             db.session.delete(container)
             db.session.commit()
             return jsonify({"message": f"容器 {name} 已删除"}), 200
