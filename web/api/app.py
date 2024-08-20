@@ -22,8 +22,7 @@ SUPPORTED_IMAGES = {
 }
 
 class Container(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(80), unique=True, nullable=False)
+    id = db.Column(db.String(64), primary_key=True)
     image = db.Column(db.String(80), nullable=False)
     ssh_port = db.Column(db.Integer, unique=True, nullable=False)
     nat_start_port = db.Column(db.Integer, unique=True, nullable=False)
@@ -36,7 +35,7 @@ def find_available_port(start, end):
     available_ports = set(range(start, end + 1)) - used_ports
     return random.choice(list(available_ports)) if available_ports else None
 
-def create_container(image_key, name, cpu, memory):
+def create_container(image_key, cpu, memory):
     if image_key not in SUPPORTED_IMAGES:
         raise ValueError("不支持的镜像类型")
 
@@ -51,7 +50,6 @@ def create_container(image_key, name, cpu, memory):
 
     container = client.containers.run(
         image,
-        name=name,
         detach=True,
         cpu_period=100000,
         cpu_quota=int(float(cpu) * 100000),
@@ -60,6 +58,7 @@ def create_container(image_key, name, cpu, memory):
         ports={'22/tcp': ssh_port}
     )
 
+    container_id = container.id
     container_ip = container.attrs['NetworkSettings']['IPAddress']
 
     # 设置 NAT 端口转发规则
@@ -76,15 +75,14 @@ def create_container(image_key, name, cpu, memory):
             ], check=True)
         except subprocess.CalledProcessError as e:
             app.logger.error(f"设置 NAT 规则失败: {e}")
-            # 如果设置失败，可以选择继续或者抛出异常
 
-    new_container = Container(name=name, image=image, ssh_port=ssh_port,
+    new_container = Container(id=container_id, image=image, ssh_port=ssh_port,
                               nat_start_port=nat_start_port, nat_end_port=nat_end_port)
     db.session.add(new_container)
     db.session.commit()
 
     return {
-        "name": name,
+        "id": container_id,
         "image": image,
         "ip": container_ip,
         "ssh_port": ssh_port,
@@ -106,7 +104,6 @@ def api_create_container():
 
         result = create_container(
             data.get('image'),
-            data.get('name'),
             data.get('cpu'),
             int(data.get('memory', 0))
         )
@@ -120,11 +117,11 @@ def api_create_container():
 @app.route('/api/delete_container', methods=['POST'])
 def api_delete_container():
     try:
-        name = request.json.get('name')
-        container = Container.query.filter_by(name=name).first()
+        container_id = request.json.get('id')
+        container = Container.query.get(container_id)
         if container:
             # 删除 Docker 容器
-            docker_container = client.containers.get(name)
+            docker_container = client.containers.get(container_id)
             container_ip = docker_container.attrs['NetworkSettings']['IPAddress']
             docker_container.remove(force=True)
 
@@ -142,12 +139,11 @@ def api_delete_container():
                     ], check=True)
                 except subprocess.CalledProcessError as e:
                     app.logger.error(f"删除 NAT 规则失败: {e}")
-                    # 如果删除失败，可以选择继续或者抛出异常
 
             # 从数据库中删除记录
             db.session.delete(container)
             db.session.commit()
-            return jsonify({"message": f"容器 {name} 已删除"}), 200
+            return jsonify({"message": f"容器 {container_id} 已删除"}), 200
         else:
             return jsonify({"error": "容器不存在"}), 404
     except Exception as e:
