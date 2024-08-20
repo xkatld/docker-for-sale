@@ -44,71 +44,73 @@ class Container(db.Model):
 container_queue = queue.Queue()
 
 def find_available_port_range(start, end, count):
-    used_ranges = Container.query.with_entities(Container.nat_start_port, Container.nat_end_port).all()
-    available_ranges = set(range(start, end + 1, count))
-    for used_start, used_end in used_ranges:
-        available_ranges -= set(range(used_start, used_end + 1, count))
-    return random.choice(list(available_ranges)) if available_ranges else None
+    with app.app_context():
+        used_ranges = Container.query.with_entities(Container.nat_start_port, Container.nat_end_port).all()
+        available_ranges = set(range(start, end + 1, count))
+        for used_start, used_end in used_ranges:
+            available_ranges -= set(range(used_start, used_end + 1, count))
+        return random.choice(list(available_ranges)) if available_ranges else None
 
 def create_container(image_key, cpu, memory, disk_size):
-    if image_key not in SUPPORTED_IMAGES:
-        raise ValueError("不支持的镜像类型")
+    with app.app_context():
+        if image_key not in SUPPORTED_IMAGES:
+            raise ValueError("不支持的镜像类型")
 
-    image = SUPPORTED_IMAGES[image_key]
+        image = SUPPORTED_IMAGES[image_key]
 
-    ssh_port = find_available_port_range(10000, 10999, 1)
-    nat_start_port = find_available_port_range(20000, 60000, 100)
+        ssh_port = find_available_port_range(10000, 10999, 1)
+        nat_start_port = find_available_port_range(20000, 60000, 100)
 
-    if not all([ssh_port, nat_start_port]):
-        raise Exception("没有足够的可用端口")
+        if not all([ssh_port, nat_start_port]):
+            raise Exception("没有足够的可用端口")
 
-    nat_end_port = nat_start_port + 99
+        nat_end_port = nat_start_port + 99
 
-    logger.info(f"创建容器，镜像: {image}, SSH端口: {ssh_port}, NAT端口: {nat_start_port}-{nat_end_port}, 磁盘大小: {disk_size}")
+        logger.info(f"创建容器，镜像: {image}, SSH端口: {ssh_port}, NAT端口: {nat_start_port}-{nat_end_port}, 磁盘大小: {disk_size}")
 
-    # 创建带有大小限制的卷
-    volume_name = f"volume_{ssh_port}"
-    client.volumes.create(name=volume_name, driver="local", driver_opts={"type": "tmpfs", "device": "tmpfs", "o": f"size={disk_size}"})
+        # 创建带有大小限制的卷
+        volume_name = f"volume_{ssh_port}"
+        client.volumes.create(name=volume_name, driver="local", driver_opts={"type": "tmpfs", "device": "tmpfs", "o": f"size={disk_size}"})
 
-    port_bindings = {
-        '22/tcp': ssh_port,
-        **{f'{p}/tcp': p for p in range(nat_start_port, nat_end_port + 1)}
-    }
+        port_bindings = {
+            '22/tcp': ssh_port,
+            **{f'{p}/tcp': p for p in range(nat_start_port, nat_end_port + 1)}
+        }
 
-    container = client.containers.run(
-        image,
-        detach=True,
-        cpu_period=100000,
-        cpu_quota=int(float(cpu) * 100000),
-        mem_limit=f"{memory}m",
-        memswap_limit=f"{memory}m",  # 限制 swap 使用
-        restart_policy={"Name": "always"},
-        ports=port_bindings,
-        volumes={volume_name: {'bind': '/mnt/data', 'mode': 'rw'}}
-    )
+        container = client.containers.run(
+            image,
+            detach=True,
+            cpu_period=100000,
+            cpu_quota=int(float(cpu) * 100000),
+            mem_limit=f"{memory}m",
+            memswap_limit=f"{memory}m",  # 限制 swap 使用
+            restart_policy={"Name": "always"},
+            ports=port_bindings,
+            volumes={volume_name: {'bind': '/mnt/data', 'mode': 'rw'}}
+        )
 
-    container_id = container.id[:12]
-    container_ip = container.attrs['NetworkSettings']['IPAddress']
+        container_id = container.id[:12]
+        container_ip = container.attrs['NetworkSettings']['IPAddress']
 
-    logger.info(f"容器创建成功，ID: {container_id}, IP: {container_ip}")
+        logger.info(f"容器创建成功，ID: {container_id}, IP: {container_ip}")
 
-    new_container = Container(id=container_id, image=image, ssh_port=ssh_port,
-                              nat_start_port=nat_start_port, nat_end_port=nat_end_port,
-                              disk_size=disk_size)
-    db.session.add(new_container)
-    db.session.commit()
+        new_container = Container(id=container_id, image=image, ssh_port=ssh_port,
+                                  nat_start_port=nat_start_port, nat_end_port=nat_end_port,
+                                  disk_size=disk_size)
+        db.session.add(new_container)
+        db.session.commit()
 
-    logger.info(f"容器 {container_id} 创建成功并添加到数据库")
+        logger.info(f"容器 {container_id} 创建成功并添加到数据库")
 
-    return {
-        "id": container_id,
-        "image": image,
-        "ip": container_ip,
-        "ssh_port": ssh_port,
-        "nat_start_port": nat_start_port,
-        "nat_end_port": nat_end_port,
-        "disk_size": disk_size
-    }
+        return {
+            "id": container_id,
+            "image": image,
+            "ip": container_ip,
+            "ssh_port": ssh_port,
+            "nat_start_port": nat_start_port,
+            "nat_end_port": nat_end_port,
+            "disk_size": disk_size
+        }
 
 @app.route('/favicon.ico')
 def favicon():
@@ -116,13 +118,14 @@ def favicon():
                                'favicon.ico', mimetype='image/vnd.microsoft.icon')
 
 def container_creator():
-    while True:
-        task = container_queue.get()
-        try:
-            create_container(**task)
-        except Exception as e:
-            logger.error(f"创建容器时发生错误: {str(e)}")
-        container_queue.task_done()
+    with app.app_context():
+        while True:
+            task = container_queue.get()
+            try:
+                create_container(**task)
+            except Exception as e:
+                logger.error(f"创建容器时发生错误: {str(e)}")
+            container_queue.task_done()
 
 # 启动容器创建线程
 threading.Thread(target=container_creator, daemon=True).start()
@@ -285,8 +288,6 @@ def api_sync_containers():
 
 @app.errorhandler(Exception)
 def handle_exception(e):
-    if isinstance(e, HTTPException):
-        return e
     logger.error(f"未捕获的异常: {str(e)}")
     return jsonify({"error": "服务器内部错误"}), 500
 
