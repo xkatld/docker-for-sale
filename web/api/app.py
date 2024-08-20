@@ -8,6 +8,8 @@ import json
 import time
 import warnings
 import urllib3
+import queue
+import threading
 
 warnings.filterwarnings("ignore", category=urllib3.exceptions.InsecureRequestWarning)
 
