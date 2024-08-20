@@ -46,10 +46,10 @@ curl -X POST http://0.0.0.0:88/api/create_container \
          "memory": 512
      }'
 
-#删除容器（假设容器 ID 为 "abc123"）：
+#删除容器（假设容器 ID 为 "35195543422b"）：
 curl -X POST http://0.0.0.0:88/api/delete_container \
      -H "Content-Type: application/json" \
      -d '{
-         "id": "abc123"
+         "id": "35195543422b"
      }'
 ```
