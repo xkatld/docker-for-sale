@@ -6,50 +6,38 @@ if [ "$(id -u)" != "0" ]; then
    exit 1
 fi
 
-# 安装必要的软件包
+# 更新系统包列表
 apt-get update
-apt-get install -y iptables-persistent python3 python3-pip docker.io
+
+# 安装 Docker（如果尚未安装）
+if ! command -v docker &> /dev/null; then
+    echo "正在安装 Docker..."
+    apt-get install -y docker.io
+    systemctl enable docker
+    systemctl start docker
+else
+    echo "Docker 已安装"
+fi
+
+# 安装 Python3 和 pip（如果尚未安装）
+apt-get install -y python3 python3-pip
 rm /usr/lib/python3.11/EXTERNALLY-MANAGED
-systemctl enable docker
-systemctl restart docker
-
-# 创建 iptables 规则保存目录
-mkdir -p /etc/iptables
-
-# 允许 Docker 容器之间的通信
-iptables -A FORWARD -i docker0 -o docker0 -j ACCEPT
-
-# 允许 Docker 容器访问外网
-iptables -A FORWARD -i docker0 ! -o docker0 -j ACCEPT
-iptables -A FORWARD -o docker0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-
-# 设置 DOCKER-USER 链以允许所有流量
-iptables -N DOCKER-USER || true
-iptables -F DOCKER-USER
-iptables -A DOCKER-USER -j RETURN
-
-# 保存 iptables 规则
-iptables-save > /etc/iptables/rules.v4
-
-# 确保系统启动时加载 iptables 规则
-cat > /etc/systemd/system/iptables-restore.service <<EOL
-[Unit]
-Description=Restore iptables firewall rules
-Before=network-pre.target
-
-[Service]
-Type=oneshot
-ExecStart=/sbin/iptables-restore /etc/iptables/rules.v4
-
-[Install]
-WantedBy=multi-user.target
-EOL
-
-# 启用并启动 iptables-restore 服务
-systemctl enable iptables-restore.service
-systemctl start iptables-restore.service
 
 # 安装 Python 依赖
 pip3 install flask flask-sqlalchemy docker
 
+# 创建用于存储数据库的目录
+mkdir -p /var/lib/docker-for-sale
+chown -R $SUDO_USER:$SUDO_USER /var/lib/docker-for-sale
+
+# 确保 Docker 服务启动
+systemctl start docker
+
+# 允许当前用户（如果不是root）使用 Docker
+if [ -n "$SUDO_USER" ]; then
+    usermod -aG docker $SUDO_USER
+    echo "已将用户 $SUDO_USER 添加到 docker 组。请注销并重新登录以使更改生效。"
+fi
+
 echo "环境配置完成。"
+echo "请确保您的防火墙（如果启用）允许必要的端口访问。"
