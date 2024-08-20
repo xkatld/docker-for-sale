@@ -22,7 +22,7 @@ SUPPORTED_IMAGES = {
 }
 
 class Container(db.Model):
-    id = db.Column(db.String(64), primary_key=True)
+    id = db.Column(db.String(12), primary_key=True)  # 使用短 ID（12 字符）
     image = db.Column(db.String(80), nullable=False)
     ssh_port = db.Column(db.Integer, unique=True, nullable=False)
     nat_start_port = db.Column(db.Integer, unique=True, nullable=False)
@@ -58,7 +58,7 @@ def create_container(image_key, cpu, memory):
         ports={'22/tcp': ssh_port}
     )
 
-    container_id = container.id
+    container_id = container.id[:12]  # 使用短 ID
     container_ip = container.attrs['NetworkSettings']['IPAddress']
 
     # 设置 NAT 端口转发规则
@@ -138,7 +138,8 @@ def api_delete_container():
                         "--to-destination", f"{container_ip}:{port}"
                     ], check=True)
                 except subprocess.CalledProcessError as e:
-                    app.logger.error(f"删除 NAT 规则失败: {e}")
+                    # 如果规则不存在，忽略错误
+                    app.logger.warning(f"删除 NAT 规则失败 (可能不存在): {e}")
 
             # 从数据库中删除记录
             db.session.delete(container)
