@@ -68,6 +68,10 @@
                                 <label for="disk_size" class="form-label">磁盘大小</label>
                                 <input type="text" class="form-control" id="disk_size" name="disk_size" value="1G" required>
                             </div>
+                            <div class="mb-3">
+                                <label for="count" class="form-label">创建数量</label>
+                                <input type="number" class="form-control" id="count" name="count" min="1" value="1" required>
+                            </div>
                             <button type="submit" class="btn btn-primary btn-sm">创建容器</button>
                         </form>
                     </div>
@@ -86,14 +90,29 @@
             
             axios.post('/api/create_container', data)
                 .then(function (response) {
-                    alert('容器创建成功！');
-                    location.href = '/containers';
+                    alert(response.data.message);
+                    checkContainerCreationStatus();
                 })
                 .catch(function (error) {
-                    alert('创建容器失败: ' + error.response.data.error);
+                    alert('添加容器到创建队列失败: ' + error.response.data.error);
                 });
         });
+
+        function checkContainerCreationStatus() {
+            let checkInterval = setInterval(function() {
+                axios.get('/api/container_count')
+                    .then(function (response) {
+                        if (response.data.count > 0) {
+                            clearInterval(checkInterval);
+                            alert('容器创建完成！');
+                            location.href = '/containers';
+                        }
+                    })
+                    .catch(function (error) {
+                        console.error('检查容器创建状态失败:', error);
+                    });
+            }, 5000);  // 每5秒检查一次
+        }
     </script>
 </body>
 </html>
-
