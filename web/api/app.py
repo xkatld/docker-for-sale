@@ -238,6 +238,41 @@ def api_delete_containers():
         logger.error(f"批量删除容器时发生错误: {str(e)}")
         return jsonify({"error": "服务器内部错误"}), 500
 
+@app.route('/api/sync_containers', methods=['POST'])
+def api_sync_containers():
+    try:
+        db_containers = Container.query.all()
+        docker_containers = client.containers.list()
+        docker_container_ids = [c.id[:12] for c in docker_containers]
+
+        removed_count = 0
+        for db_container in db_containers:
+            if db_container.id not in docker_container_ids:
+                logger.warning(f"容器 {db_container.id} 在数据库中存在但在 Docker 中不存在，正在从数据库中删除")
+                db.session.delete(db_container)
+                removed_count += 1
+
+        db.session.commit()
+
+        # 检查并清理孤立的卷
+        volumes = client.volumes.list()
+        removed_volumes = 0
+        for volume in volumes:
+            if volume.name.startswith('volume_'):
+                ssh_port = volume.name.split('_')[1]
+                if not Container.query.filter_by(ssh_port=ssh_port).first():
+                    logger.warning(f"发现孤立的卷 {volume.name}，正在删除")
+                    volume.remove(force=True)
+                    removed_volumes += 1
+
+        logger.info("容器同步完成")
+        return jsonify({
+            "message": f"同步完成。从数据库中删除了 {removed_count} 个不存在的容器记录，清理了 {removed_volumes} 个孤立的卷。"
+        }), 200
+    except Exception as e:
+        logger.error(f"同步容器时发生错误: {str(e)}")
+        return jsonify({"error": "同步过程中发生错误"}), 500
+
 @app.errorhandler(Exception)
 def handle_exception(e):
     logger.error(f"未捕获的异常: {str(e)}")
