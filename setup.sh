@@ -24,7 +24,7 @@ apt-get install -y python3 python3-pip
 rm /usr/lib/python3.11/EXTERNALLY-MANAGED
 
 # 安装 Python 依赖
-pip3 install flask flask-sqlalchemy docker
+pip install flask flask-sqlalchemy docker urllib3
 
 # 创建用于存储数据库的目录
 mkdir -p /var/lib/docker-for-sale
