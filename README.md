@@ -37,14 +37,22 @@ python3 app.py
 浏览器中访问 http://0.0.0.0:88 使用 Web 界面，或使用 API 客户端调用 /api/create_container 端点
 API 使用示例（使用 curl）：
 ```
+#创建容器：
+
+<BASH>
 curl -X POST http://0.0.0.0:88/api/create_container \
      -H "Content-Type: application/json" \
      -d '{
          "image": "ssh-ubuntu",
-         "name": "test",
          "cpu": 0.5,
-         "memory": 512,
-         "disk": 5,
-         "bandwidth": 10
+         "memory": 512
+     }'
+#删除容器（假设容器 ID 为 "abc123"）：
+
+<BASH>
+curl -X POST http://0.0.0.0:88/api/delete_container \
+     -H "Content-Type: application/json" \
+     -d '{
+         "id": "abc123"
      }'
 ```
