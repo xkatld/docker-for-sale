@@ -62,19 +62,31 @@ def create_container(image_key, cpu, memory):
     container_ip = container.attrs['NetworkSettings']['IPAddress']
 
     # 设置 NAT 端口转发规则
+    nat_rules = []
     for port in range(nat_start_port, nat_end_port + 1):
+        rule = [
+            "iptables",
+            "-t", "nat",
+            "-A", "PREROUTING",
+            "-p", "tcp",
+            "--dport", str(port),
+            "-j", "DNAT",
+            "--to-destination", f"{container_ip}:{port}"
+        ]
         try:
-            subprocess.run([
-                "iptables",
-                "-t", "nat",
-                "-A", "PREROUTING",
-                "-p", "tcp",
-                "--dport", str(port),
-                "-j", "DNAT",
-                "--to-destination", f"{container_ip}:{port}"
-            ], check=True)
+            subprocess.run(rule, check=True)
+            nat_rules.append(rule)
         except subprocess.CalledProcessError as e:
             app.logger.error(f"设置 NAT 规则失败: {e}")
+            # 如果设置失败，删除已添加的规则
+            for added_rule in nat_rules:
+                try:
+                    added_rule[3] = "-D"  # 将 -A 改为 -D 以删除规则
+                    subprocess.run(added_rule, check=True)
+                except subprocess.CalledProcessError:
+                    pass
+            container.remove(force=True)
+            raise Exception("设置 NAT 规则失败")
 
     new_container = Container(id=container_id, image=image, ssh_port=ssh_port,
                               nat_start_port=nat_start_port, nat_end_port=nat_end_port)
@@ -127,18 +139,19 @@ def api_delete_container():
 
             # 清理 NAT 规则
             for port in range(container.nat_start_port, container.nat_end_port + 1):
+                rule = [
+                    "iptables",
+                    "-t", "nat",
+                    "-D", "PREROUTING",
+                    "-p", "tcp",
+                    "--dport", str(port),
+                    "-j", "DNAT",
+                    "--to-destination", f"{container_ip}:{port}"
+                ]
                 try:
-                    subprocess.run([
-                        "iptables",
-                        "-t", "nat",
-                        "-D", "PREROUTING",
-                        "-p", "tcp",
-                        "--dport", str(port),
-                        "-j", "DNAT",
-                        "--to-destination", f"{container_ip}:{port}"
-                    ], check=True)
+                    subprocess.run(rule, check=True)
                 except subprocess.CalledProcessError as e:
-                    # 如果规则不存在，忽略错误
+                    # 如果规则不存在，记录警告但继续执行
                     app.logger.warning(f"删除 NAT 规则失败 (可能不存在): {e}")
 
             # 从数据库中删除记录
