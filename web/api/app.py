@@ -5,6 +5,8 @@ import random
 import logging
 import json
 import time
+import threading
+import queue
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///containers.db'
@@ -32,6 +34,9 @@ class Container(db.Model):
     nat_start_port = db.Column(db.Integer, unique=True, nullable=False)
     nat_end_port = db.Column(db.Integer, unique=True, nullable=False)
     disk_size = db.Column(db.String(20), nullable=False)
+
+# 创建一个队列来存储待创建的容器
+container_queue = queue.Queue()
 
 def find_available_port_range(start, end, count):
     used_ranges = Container.query.with_entities(Container.nat_start_port, Container.nat_end_port).all()
@@ -71,9 +76,10 @@ def create_container(image_key, cpu, memory, disk_size):
         cpu_period=100000,
         cpu_quota=int(float(cpu) * 100000),
         mem_limit=f"{memory}m",
+        memswap_limit=f"{memory}m",  # 限制 swap 使用
         restart_policy={"Name": "always"},
         ports=port_bindings,
-        volumes={volume_name: {'bind': '/mnt/data', 'mode': 'rw'}}  # 挂载卷
+        volumes={volume_name: {'bind': '/mnt/data', 'mode': 'rw'}}
     )
 
     container_id = container.id[:12]
@@ -99,6 +105,18 @@ def create_container(image_key, cpu, memory, disk_size):
         "disk_size": disk_size
     }
 
+def container_creator():
+    while True:
+        task = container_queue.get()
+        try:
+            create_container(**task)
+        except Exception as e:
+            logger.error(f"创建容器时发生错误: {str(e)}")
+        container_queue.task_done()
+
+# 启动容器创建线程
+threading.Thread(target=container_creator, daemon=True).start()
+
 @app.route('/')
 def index():
     return render_template('index.html', images=SUPPORTED_IMAGES.keys())
@@ -116,24 +134,27 @@ def api_create_container():
             return jsonify({"error": "无效的 JSON 数据"}), 400
 
         count = int(data.get('count', 1))
-        results = []
-
+        
         for _ in range(count):
-            result = create_container(
-                data.get('image'),
-                data.get('cpu'),
-                int(data.get('memory', 0)),
-                data.get('disk_size', '1G')
-            )
-            results.append(result)
+            container_queue.put({
+                'image_key': data.get('image'),
+                'cpu': data.get('cpu'),
+                'memory': int(data.get('memory', 64)),  # 默认使用64MB
+                'disk_size': data.get('disk_size', '1G')
+            })
 
-        return jsonify(results), 200
+        return jsonify({"message": f"已添加 {count} 个容器到创建队列"}), 202
     except ValueError as e:
         logger.error(f"无效输入: {str(e)}")
         return jsonify({"error": str(e)}), 400
     except Exception as e:
-        logger.error(f"创建容器时发生错误: {str(e)}")
+        logger.error(f"添加容器到队列时发生错误: {str(e)}")
         return jsonify({"error": "服务器内部错误"}), 500
+
+@app.route('/api/container_count')
+def container_count():
+    count = Container.query.count()
+    return jsonify({"count": count})
 
 @app.route('/api/container_stats/<container_id>')
 def container_stats(container_id):
@@ -177,6 +198,44 @@ def api_delete_container():
             return jsonify({"error": "容器不存在"}), 404
     except Exception as e:
         logger.error(f"删除容器时发生错误: {str(e)}")
+        return jsonify({"error": "服务器内部错误"}), 500
+
+@app.route('/api/delete_containers', methods=['POST'])
+def api_delete_containers():
+    try:
+        container_ids = request.json.get('ids', [])
+        if not container_ids:
+            return jsonify({"error": "没有提供容器ID"}), 400
+
+        deleted_count = 0
+        for container_id in container_ids:
+            container = Container.query.get(container_id)
+            if container:
+                try:
+                    # 删除 Docker 容器
+                    docker_container = client.containers.get(container_id)
+                    docker_container.remove(force=True)
+                    logger.info(f"Docker 容器 {container_id} 已删除")
+
+                    # 删除对应的卷
+                    volume_name = f"volume_{container.ssh_port}"
+                    try:
+                        volume = client.volumes.get(volume_name)
+                        volume.remove(force=True)
+                        logger.info(f"卷 {volume_name} 已删除")
+                    except docker.errors.NotFound:
+                        logger.warning(f"卷 {volume_name} 不存在，无需删除")
+
+                    # 从数据库中删除记录
+                    db.session.delete(container)
+                    deleted_count += 1
+                except Exception as e:
+                    logger.error(f"删除容器 {container_id} 时发生错误: {str(e)}")
+
+        db.session.commit()
+        return jsonify({"message": f"成功删除 {deleted_count} 个容器"}), 200
+    except Exception as e:
+        logger.error(f"批量删除容器时发生错误: {str(e)}")
         return jsonify({"error": "服务器内部错误"}), 500
 
 @app.errorhandler(Exception)
