@@ -43,12 +43,20 @@
 
     <div class="container">
         <h5 class="mb-3">现有容器</h5>
+        <button id="deleteSelectedBtn" class="btn btn-danger btn-sm mb-3" style="display: none;">
+            <i class="bi bi-trash"></i> 删除选中的容器
+        </button>
         <div class="row row-cols-1 row-cols-md-2 g-4" id="containerList">
             {% for container in containers %}
             <div class="col">
                 <div class="card h-100">
                     <div class="card-body">
-                        <h6 class="card-title">{{ container.image }}</h6>
+                        <div class="form-check">
+                            <input class="form-check-input container-checkbox" type="checkbox" value="{{ container.id }}" id="checkbox{{ container.id }}">
+                            <label class="form-check-label" for="checkbox{{ container.id }}">
+                                <h6 class="card-title">{{ container.image }}</h6>
+                            </label>
+                        </div>
                         <p class="card-text">
                             ID: {{ container.id }}<br>
                             SSH 端口: {{ container.ssh_port }}<br>
@@ -67,6 +75,7 @@
             {% endfor %}
         </div>
     </div>
+
 
     <!-- 监控模态框 -->
     <div class="modal fade" id="statsModal" tabindex="-1" aria-labelledby="statsModalLabel" aria-hidden="true">
@@ -115,6 +124,37 @@
                 eventSource.close();
             });
         }
+        document.addEventListener('DOMContentLoaded', function() {
+            const checkboxes = document.querySelectorAll('.container-checkbox');
+            const deleteSelectedBtn = document.getElementById('deleteSelectedBtn');
+
+            checkboxes.forEach(checkbox => {
+                checkbox.addEventListener('change', updateDeleteButton);
+            });
+
+            deleteSelectedBtn.addEventListener('click', deleteSelectedContainers);
+
+            function updateDeleteButton() {
+                const checkedBoxes = document.querySelectorAll('.container-checkbox:checked');
+                deleteSelectedBtn.style.display = checkedBoxes.length > 0 ? 'inline-block' : 'none';
+            }
+
+            function deleteSelectedContainers() {
+                const selectedIds = Array.from(document.querySelectorAll('.container-checkbox:checked')).map(cb => cb.value);
+                if (selectedIds.length === 0) return;
+
+                if (confirm(`确定要删除选中的 ${selectedIds.length} 个容器吗？`)) {
+                    axios.post('/api/delete_containers', { ids: selectedIds })
+                        .then(function (response) {
+                            alert(response.data.message);
+                            location.reload();
+                        })
+                        .catch(function (error) {
+                            alert('删除容器失败: ' + error.response.data.error);
+                        });
+                }
+            }
+        });
     </script>
 </body>
 </html>
