@@ -1,5 +1,6 @@
 # docker-for-sale
 docker销售系统，web前后端，api功能文档，镜像制作。
+本来想慢慢的写个销售系统的，但是发现不能对docker流量宽带限制，目前只能当作docker-web管理面板。。。
 # 环境
 基于Debian12,docker,python3开发
 ```shell
