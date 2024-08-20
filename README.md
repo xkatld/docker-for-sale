@@ -1,7 +1,7 @@
 # docker-for-sale
 docker销售系统，web前后端，api功能文档，镜像制作。
 # 环境
-基于Debian12开发
+基于Debian12,docker,python3开发
 ```shell
 apt update -y
 apt install docker.io python3 python3-pip git -y
